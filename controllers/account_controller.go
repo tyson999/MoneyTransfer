@@ -9,11 +9,11 @@ import(
 	"net/http"
 	"MoneyTransfer/models"
 	"github.com/gin-gonic/gin"
-	"strconv"
+	"MoneyTransfer/database"
+	"errors" 
+	"github.com/jackc/pgx/v5"
 )
 
-
-var Accounts = []models.Account{}
 
 func CreateAccount(c *gin.Context){
 	var account models.Account
@@ -26,155 +26,367 @@ func CreateAccount(c *gin.Context){
 
 	}
 
-	account.ID = len(Accounts) +1 
-	account.Status = "active"
+	if account.CompanyID == 0 ||
+	    account.AccountName==""||
+		account.AccountType=="" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "company_id,account_name and account_type are required",
+				
+			})
 
-	Accounts = append(Accounts, account)
+			return 
+		}
+
+	if account.Status == "" {
+		account.Status = "active"
+	}
+
+	var companyID int 
+
+	err := database.DB.QueryRow(
+		c.Request.Context(),
+		`
+		SELECT id
+		FROM companies
+		WHERE id = $1;
+		`,
+		account.CompanyID,
+	).Scan(&companyID)
+
+	if err!= nil {
+		if errors.Is(err,pgx.ErrNoRows){
+			c.JSON(http.StatusNotFound,gin.H{
+				"error":"Company not found",
+			})
+			return 
+		}
+
+		c.JSON(http.StatusInternalServerError,gin.H{
+			"error":"Failed to check company",
+		})
+		return 
+	}
+
+
+	query:=`
+	INSERT INTO accounts
+	(company_id,
+	account_name,
+	account_type,
+	balance,
+	status
+	)
+	VALUES ($1,$2,$3,$4,$5)
+	RETURNING id,created_at,updated_at;
+	`
+	err = database.DB.QueryRow(
+		c.Request.Context(),
+		query,
+		account.CompanyID,
+		account.AccountName,
+		account.AccountType,
+		account.Balance,
+		account.Status,
+	).Scan(
+		&account.ID,
+		&account.CreatedAt,
+		&account.UpdatedAt,
+	)
+
+	if err!= nil{
+		c.JSON(http.StatusInternalServerError,gin.H{
+			"error": "Failed to create account",
+		})
+		return 
+	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message": "Account created successfully",
+		"message":"Account created",
 		"account": account,
 	})
-}
+}	
+
 
 func GetAccounts(c *gin.Context) {
+	query := `
+		SELECT
+			id,
+			company_id,
+			account_name,
+			account_type,
+			balance,
+			status,
+			created_at,
+			updated_at
+		FROM accounts
+		ORDER BY id;
+	`
+
+	rows, err := database.DB.Query(
+		c.Request.Context(),
+		query,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to fetch accounts",
+		})
+		return
+	}
+	defer rows.Close()
+
+	accounts := []models.Account{}
+
+	for rows.Next() {
+		var account models.Account
+
+		err := rows.Scan(
+			&account.ID,
+			&account.CompanyID,
+			&account.AccountName,
+			&account.AccountType,
+			&account.Balance,
+			&account.Status,
+			&account.CreatedAt,
+			&account.UpdatedAt,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to read account data",
+			})
+			return
+		}
+
+		accounts = append(accounts, account)
+	}
+
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed while reading accounts",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"accounts":Accounts,
+		"accounts": accounts,
 	})
 }
 
 func GetAccountByID(c *gin.Context) {
-	id,err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid account id",
-		})
-		return
-	}
+	id:=c.Param("id")
 
-	for _, account := range Accounts {
-		if account.ID == id{
-			c.JSON(http.StatusOK, gin.H{
-				"account": account,
+	var account models.Account
+
+	query:= `
+	SELECT
+	id,
+	company_id,
+	account_name,
+	account_type,
+	balance,
+	status,
+	created_at,
+	updated_at
+	FROM accounts
+	WHERE id = $1;
+	`
+
+	err:= database.DB.QueryRow(
+		c.Request.Context(),
+		query,
+		id,
+	).Scan(
+		&account.ID,
+		&account.CompanyID,
+		&account.AccountName,
+		&account.AccountType,
+		&account.Balance,
+		&account.Status,
+		&account.CreatedAt,
+		&account.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "Account not found",
 			})
-
-			return 
+			return
 		}
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": "Account not found",
-	})
-}
-
-func UpdateAccount(c *gin.Context) {
-	id,err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid account id",
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to fetch account",
 		})
 		return
-	}
-
-	var updatedAccount models.Account
-
-	if err := c.ShouldBindJSON(&updatedAccount); err != nil{
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid request body",
-		})
-
-		return 
-	}
-
-	for index, account := range Accounts {
-		if account.ID == id {
-			if updatedAccount.AccountName != "" {
-				Accounts[index].AccountName = updatedAccount.AccountName
-			}
-
-
-			if updatedAccount.Status != "" {
-				Accounts[index].Status = updatedAccount.Status 
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"message": "Account updated successfully",
-				"account": Accounts[index],
-			})
-			return 
-		}
-		
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": "Account not found",
-	})
-}
-
-func DeleteAccount(c *gin.Context){
-	id,err := strconv.Atoi(c.Params.ByName("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid account id",
-		})
-		return
-	}
-
-	for index, account := range Accounts {
-		if account.ID == id {
-			Accounts = append(Accounts[:index], Accounts[index+1:]...)
-			c.JSON(http.StatusOK, gin.H{
-				"message": "Account deleted successfully",
-			})
-			return 
-		}
-	}
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": "Account not found",
-	})
-}
-
-func GetAccountBalance(c *gin.Context){
-	id,err  := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid account id",
-		})
-		return
-	}
-
-	for _, account := range Accounts {
-		if account.ID == id {
-			c.JSON(http.StatusOK, gin.H{
-				"balance": account.Balance,
-			})
-			return 
-		}
-	}
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": "Account not found",
-	})
-}
-
-func GetAccountTransfers(c *gin.Context){
-	id,err := strconv.Atoi(c.Param("id"))
-
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid account id",
-		})
-		return
-	}
-
-	accountTransfers := []models.Transfer {}
-
-	for _, transfer := range Transfers {
-		if transfer.FromAccountID == id || transfer.ToAccountID == id {
-			accountTransfers = append(accountTransfers, transfer)
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"transfers": accountTransfers,
+		"account": account,
+	})
+}
+
+
+func UpdateAccount(c *gin.Context) {
+	id := c.Param("id")
+
+	var account models.Account
+
+	if err := c.ShouldBindJSON(&account); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request body",
+		})
+		return
+	}
+
+	if account.CompanyID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "company_id is required",
+		})
+		return
+	}
+
+	if account.AccountName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "account_name is required",
+		})
+		return
+	}
+
+	if account.AccountType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "account_type is required",
+		})
+		return
+	}
+
+	if account.Balance < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "balance cannot be negative",
+		})
+		return
+	}
+
+	if account.Status == "" {
+		account.Status = "active"
+	}
+
+	// Verify that the company exists.
+	var companyID int
+
+	err := database.DB.QueryRow(
+		c.Request.Context(),
+		`
+		SELECT id
+		FROM companies
+		WHERE id = $1;
+		`,
+		account.CompanyID,
+	).Scan(&companyID)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "Company not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to verify company",
+		})
+		return
+	}
+
+	query := `
+		UPDATE accounts
+		SET
+			company_id = $1,
+			account_name = $2,
+			account_type = $3,
+			balance = $4,
+			status = $5,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = $6
+		RETURNING
+			id,
+			company_id,
+			account_name,
+			account_type,
+			balance,
+			status,
+			created_at,
+			updated_at;
+	`
+
+	err = database.DB.QueryRow(
+		c.Request.Context(),
+		query,
+		account.CompanyID,
+		account.AccountName,
+		account.AccountType,
+		account.Balance,
+		account.Status,
+		id,
+	).Scan(
+		&account.ID,
+		&account.CompanyID,
+		&account.AccountName,
+		&account.AccountType,
+		&account.Balance,
+		&account.Status,
+		&account.CreatedAt,
+		&account.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "Account not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to update account",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Account updated successfully",
+		"account": account,
+	})
+}
+	
+
+	
+
+func DeleteAccount(c *gin.Context){
+	id:= c.Param("id")
+
+	query := `
+		DELETE FROM accounts
+		WHERE id = $1;
+	`
+
+	commandTag, err := database.DB.Exec(
+		c.Request.Context(),
+		query,
+		id,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to delete account",
+		})
+		return
+	}
+
+	if commandTag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Account not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Account deleted successfully",
 	})
 }

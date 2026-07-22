@@ -21,17 +21,14 @@ func SetupRoutes(router *gin.Engine){
 	router.GET("/accounts/:id", controllers.GetAccountByID)    //give the account with the given id
 	router.PATCH("/accounts/:id",controllers.UpdateAccount)
     router.DELETE("/accounts/:id", controllers.DeleteAccount)
-	router.GET("/accounts/:id/balance", controllers.GetAccountBalance)
-	router.GET("/accounts/:id/transfers", controllers.GetAccountTransfers)
+	
 	
 	
 	
 	//TRANSFER API
 	router.POST("/transfers",controllers.CreateTransfer)
-	router.GET("/transfers", controllers.GetTransfer)           //get all the transfers
-	router.GET("/transfers/:id", controllers.GetTransferByID)   //get a specific transfer
-    router.PUT("/transfers/:id", controllers.UpdateTransfer)
-	router.DELETE("/transfers/:id", controllers.DeleteTransfer)   //delete a specific transfer
+	router.GET("/transfers", controllers.GetTransfer)      
+	router.GET("/transfers/:id", controllers.GetTransferByID)     
 
 	//USER APR
 
