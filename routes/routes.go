@@ -28,7 +28,9 @@ func SetupRoutes(router *gin.Engine){
 	//TRANSFER API
 	router.POST("/transfers",controllers.CreateTransfer)
 	router.GET("/transfers", controllers.GetTransfer)      
-	router.GET("/transfers/:id", controllers.GetTransferByID)     
+	router.GET("/transfers/:id", controllers.GetTransferByID)
+	router.PATCH("/transfers/:id",controllers.UpdateTransfer)     
+	router.DELETE("transfers/:id",controllers.DeleteTransfer)
 
 	//USER APR
 
